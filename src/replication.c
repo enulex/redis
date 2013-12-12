@@ -51,6 +51,7 @@ void createReplicationBacklog(void) {
      * offset by one to make sure we'll not be able to PSYNC with any
      * previous slave. This is needed because we avoid incrementing the
      * master_repl_offset if no backlog exists nor slaves are attached. */
+    // [MARK]
     server.master_repl_offset++;
 
     /* We don't have any data inside our buffer, but virtually the first
@@ -106,6 +107,8 @@ void feedReplicationBacklog(void *ptr, size_t len) {
     while(len) {
         size_t thislen = server.repl_backlog_size - server.repl_backlog_idx;
         if (thislen > len) thislen = len;
+        // [MARK]
+        // repl_backlog updated
         memcpy(server.repl_backlog+server.repl_backlog_idx,p,thislen);
         server.repl_backlog_idx += thislen;
         if (server.repl_backlog_idx == server.repl_backlog_size)
@@ -138,6 +141,8 @@ void feedReplicationBacklogWithObject(robj *o) {
     feedReplicationBacklog(p,len);
 }
 
+// [MARK]
+// where the repl_backlog update begins.
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     listNode *ln;
     listIter li;
@@ -655,6 +660,13 @@ void updateSlavesWaitingBgsave(int bgsaveerr) {
                 redisLog(REDIS_WARNING,"SYNC failed. BGSAVE child returned an error");
                 continue;
             }
+            // [MARK]
+            // Q: 为什么每个slave都要打开同一个server.rdb_filename
+            // A: 除非使用异步发送，否则使用多个fd没有意义。
+            //    但是看代码，怎么看都是同步发送的, sendBulkToSlave 
+            //    however，sendBulkToSlave函数的触发是事件驱动的，就有个能产生同步问题。
+            //    其实如果是单进程，这也不是问题。
+            //    猜测是为了后面好优化吧。
             if ((slave->repldbfd = open(server.rdb_filename,O_RDONLY)) == -1 ||
                 redis_fstat(slave->repldbfd,&buf) == -1) {
                 freeClient(slave);
@@ -695,6 +707,8 @@ void updateSlavesWaitingBgsave(int bgsaveerr) {
     }
 }
 
+
+// [MARK]
 /* ----------------------------------- SLAVE -------------------------------- */
 
 /* Abort the async download of the bulk dataset while SYNC-ing with master */
@@ -712,6 +726,7 @@ void replicationAbortSyncTransfer(void) {
 /* Asynchronously read the SYNC payload we receive from a master */
 #define REPL_MAX_WRITTEN_BEFORE_FSYNC (1024*1024*8) /* 8 MB */
 void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
+    // [MARK] fd 是master的socket fd
     char buf[4096];
     ssize_t nread, readlen;
     off_t left;
@@ -1019,10 +1034,16 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
      * make sure the master is able to reply before going into the actual
      * replication process where we have long timeouts in the order of
      * seconds (in the meantime the slave would block). */
+    // [MARK]
+    // check repl_state before changing.
     if (server.repl_state == REDIS_REPL_CONNECTING) {
         redisLog(REDIS_NOTICE,"Non blocking connect for SYNC fired the event.");
         /* Delete the writable event so that the readable event remains
          * registered and we can wait for the PONG reply. */
+        // [MARK]
+        // Q: 为什么要删掉writeable的监听
+        // A: 因为要进行同步写, 读同理 
+        // 是不是不同步确认，整个流程就进行不下去呢？
         aeDeleteFileEvent(server.el,fd,AE_WRITABLE);
         server.repl_state = REDIS_REPL_RECEIVE_PONG;
         /* Send the PING, don't check for errors at all, we have the timeout
@@ -1077,7 +1098,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
         }
         sdsfree(err);
     }
-
+    
     /* Set the slave port, so that Master's INFO command can list the
      * slave listening port correctly. */
     {
@@ -1223,6 +1244,8 @@ void replicationSetMaster(char *ip, int port) {
     replicationDiscardCachedMaster(); /* Don't try a PSYNC. */
     freeReplicationBacklog(); /* Don't allow our chained slaves to PSYNC. */
     cancelReplicationHandshake();
+    // [MARK]
+    // set server.repl_state
     server.repl_state = REDIS_REPL_CONNECT;
 }
 
@@ -1268,6 +1291,8 @@ void slaveofCommand(redisClient *c) {
         }
         /* There was no previous master or the user specified a different one,
          * we can continue. */
+        // [MARK]
+        // replication 设置master
         replicationSetMaster(c->argv[1]->ptr, port);
         redisLog(REDIS_NOTICE,"SLAVE OF %s:%d enabled (user request)",
             server.masterhost, server.masterport);
@@ -1498,6 +1523,8 @@ int replicationScriptCacheExists(sds sha1) {
 /* --------------------------- REPLICATION CRON  ----------------------------- */
 
 /* Replication cron funciton, called 1 time per second. */
+// [MARK]
+// replication周期函数
 void replicationCron(void) {
     /* Non blocking connection timeout? */
     if (server.masterhost &&
@@ -1526,6 +1553,8 @@ void replicationCron(void) {
     }
 
     /* Check if we should connect to a MASTER */
+    // [MARK]
+    // this is the slave server 其实就是状态的转移
     if (server.repl_state == REDIS_REPL_CONNECT) {
         redisLog(REDIS_NOTICE,"Connecting to MASTER...");
         if (connectWithMaster() == REDIS_OK) {
@@ -1541,6 +1570,7 @@ void replicationCron(void) {
      * So slaves can implement an explicit timeout to masters, and will
      * be able to detect a link disconnection even if the TCP connection
      * will not actually go down. */
+    // 把master和slave的代码写到一起，就是这么混乱啊。
     if (!(server.cronloops % (server.repl_ping_slave_period * server.hz))) {
         listIter li;
         listNode *ln;
