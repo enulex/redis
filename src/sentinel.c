@@ -2093,6 +2093,7 @@ void sentinelCommand(redisClient *c) {
         if (!sentinel.tilt && ri && (ri->flags & SRI_S_DOWN) &&
                                     (ri->flags & SRI_MASTER))
             isdown = 1;
+        // [MARK] get leader by sentinelGetSubjectiveLeader
         if (ri) leader = sentinelGetSubjectiveLeader(ri);
 
         /* Reply with a two-elements multi-bulk reply: down state, leader. */
