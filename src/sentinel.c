@@ -2723,6 +2723,7 @@ void sentinelAskMasterStateToOtherSentinels(sentinelRedisInstance *master, int f
             mstime() - ri->last_master_down_reply_time < SENTINEL_ASK_PERIOD)
             continue;
 
+        // [MARK] Ask is-master-down-by-addr to other sentinels.
         /* Ask */
         ll2string(port,sizeof(port),master->addr->port);
         retval = redisAsyncCommand(ri->cc,
@@ -2803,7 +2804,8 @@ int sentinelLeaderIncr(dict *counters, char *runid) {
  * leader for the same epoch. */
 char *sentinelGetLeader(sentinelRedisInstance *master, uint64_t epoch) {
     // TO BE CONTINUED
-    // 选举开始的地方
+    // 选举开始的地方, 应该说是paxos算法的第2阶段, accept.
+    // 第一阶段是sentinelVoteLeader, proposol
     dict *counters;
     dictIterator *di;
     dictEntry *de;
@@ -2822,6 +2824,8 @@ char *sentinelGetLeader(sentinelRedisInstance *master, uint64_t epoch) {
         sentinelRedisInstance *ri = dictGetVal(de);
         // HACK vote是如何实现的? 在ask is-master-down-to-other-sentinels中有个实现，
         // HACK command的回复的实现
+        // 如果ri->leader_epoch > sentinel.current_epoch, 那就说明已经被其他sentinel
+        // 的更高的leader_epoch所取代,对应与paxos算法中的pb抢占pa的round.
         if (ri->leader != NULL && ri->leader_epoch == sentinel.current_epoch)
             sentinelLeaderIncr(counters,ri->leader);
         voters++;
